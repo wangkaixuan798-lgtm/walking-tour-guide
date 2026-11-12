@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>步行报站导览</title>
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--tx:#1d1d1b;--mu:#6b6b66;--ac:#c8452d;--bd:#e2ded4;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171716;--card:#232321;--tx:#f0eee8;--mu:#9a9a92;--ac:#ef6a4f;--bd:#34332f}}
+:root[data-theme="dark"]{--bg:#171716;--card:#232321;--tx:#f0eee8;--mu:#9a9a92;--ac:#ef6a4f;--bd:#34332f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.6 -apple-system,"PingFang SC","Noto Sans SC",sans-serif;padding:16px}
+h1{font-size:22px;margin:4px 0 2px}
+.sub{color:var(--mu);font-size:14px;margin:0 0 14px}
+.board{background:var(--ac);color:#fff;border-radius:16px;padding:18px;margin-bottom:12px}
+.board small{opacity:.85;font-size:13px}
+.board .name{font-size:28px;font-weight:700;margin:2px 0}
+.board .story{font-size:15px;opacity:.95;max-height:7.5em;overflow:auto}
+.row{display:flex;gap:8px;margin-bottom:12px}
+button{font:inherit;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:12px;padding:10px 14px;cursor:pointer}
+button.pri{background:var(--tx);color:var(--bg);border-color:var(--tx);flex:1;font-weight:600}
+button.sm{padding:4px 10px;font-size:13px;color:var(--mu)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.stop{display:flex;align-items:center;gap:10px}
+.stop .n{width:26px;height:26px;border-radius:50%;background:var(--bd);display:flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+.stop.done .n{background:var(--ac);color:#fff}
+.stop .i{flex:1;min-width:0}
+.stop .i b{display:block}
+.stop .i span{color:var(--mu);font-size:13px}
+input,textarea{width:100%;font:inherit;background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;margin-bottom:8px}
+.two{display:flex;gap:8px}
+h2{font-size:16px;margin:18px 0 8px}
+.note{color:var(--mu);font-size:13px}
+</style>
+</head>
+<body>
+<h1>🚌 步行报站导览</h1>
+<p class="sub">走到哪儿，报到哪儿，再讲故事</p>
+
+<div class="board">
+  <small id="state">未开始</small>
+  <div class="name" id="curName">—</div>
+  <div class="story" id="curStory">点“开始导览”，然后往下一站走。</div>
+</div>
+
+<div class="row">
+  <button class="pri" id="startBtn">▶ 开始导览</button>
+  <button id="simBtn">模拟到站</button>
+  <button id="resetBtn">重置</button>
+</div>
+
+<div class="card" id="nextInfo">下一站：—</div>
+
+<h2>站点</h2>
+<div id="list"></div>
+
+<h2>添加站点</h2>
+<div class="card">
+  <input id="fName" placeholder="站名，如：老城墙">
+  <textarea id="fStory" rows="3" placeholder="这一站要讲的故事"></textarea>
+  <div class="two"><input id="fLat" placeholder="纬度" inputmode="decimal"><input id="fLng" placeholder="经度" inputmode="decimal"></div>
+  <div class="row" style="margin:0">
+    <button id="useLoc">📍 用我当前位置</button>
+    <button class="pri" id="addBtn">添加</button>
+  </div>
+</div>
+
+<h2>设置</h2>
+<div class="card">
+  <label>到站触发半径（米）<input id="radius" type="number" value="40" min="10" max="300"></label>
+  <p class="note">需要允许定位。手机锁屏后浏览器可能暂停播报，请保持屏幕常亮。声音由浏览器朗读，音色取决于你的手机。</p>
+</div>
+
+<script>
+var DEFAULTS=[
+ {name:"天安门广场",lat:39.9087,lng:116.3975,story:"这里是北京中轴线上最开阔的地方。南面的正阳门、北面的天安门，把广场夹在中间。1949年10月1日，开国大典就在这里举行。"},
+ {name:"午门",lat:39.9136,lng:116.3975,story:"午门是紫禁城的正门，建成于明永乐十八年。它平面呈凹字形，俗称五凤楼。古时遇到重大的军事胜利，皇帝会在这里举行献俘仪式。"},
+ {name:"景山公园",lat:39.9254,lng:116.3965,story:"景山是中轴线上的制高点。明代时这里堆过煤，所以又叫煤山。登上万春亭，可以一眼望见整座故宫的金色屋顶。"}
+];
+var stops=[],done={},idx=0,watchId=null,running=false,wake=null;
+var $=function(i){return document.getElementById(i)};
+function load(){try{var s=localStorage.getItem("wg_stops");if(s)return JSON.parse(s)}catch(e){}return DEFAULTS.slice()}
+function save(){try{localStorage.setItem("wg_stops",JSON.stringify(stops))}catch(e){}}
+function dist(a,b,c,d){var R=6371000,r=Math.PI/180,x=(c-a)*r,y=(d-b)*r;
+ var h=Math.sin(x/2)*Math.sin(x/2)+Math.cos(a*r)*Math.cos(c*r)*Math.sin(y/2)*Math.sin(y/2);
+ return 2*R*Math.asin(Math.sqrt(h))}
+function render(){
+ var h="";
+ stops.forEach(function(s,i){
+  h+='<div class="card stop'+(done[i]?' done':'')+'"><div class="n">'+(i+1)+'</div><div class="i"><b>'+esc(s.name)+'</b><span>'+s.lat.toFixed(4)+', '+s.lng.toFixed(4)+'</span></div>'
+   +'<button class="sm" data-play="'+i+'">试听</button><button class="sm" data-del="'+i+'">删除</button></div>';
+ });
+ $("list").innerHTML=h||'<p class="note">还没有站点。</p>';
+ var nx=nextIdx();
+ $("nextInfo").textContent=nx<0?"全部到站 🎉":"下一站："+stops[nx].name;
+}
+function esc(t){return String(t).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;'}[c]})}
+function nextIdx(){for(var i=0;i<stops.length;i++)if(!done[i])return i;return -1}
+function ding(){try{var C=window.AudioContext||window.webkitAudioContext,c=new C(),t=c.currentTime;
+ [880,660].forEach(function(f,k){var o=c.createOscillator(),g=c.createGain();o.frequency.value=f;o.connect(g);g.connect(c.destination);
+  g.gain.setValueAtTime(.25,t+k*.25);g.gain.exponentialRampToValueAtTime(.001,t+k*.25+.22);o.start(t+k*.25);o.stop(t+k*.25+.25)})}catch(e){}}
+function say(text,cb){
+ if(!window.speechSynthesis){if(cb)cb();return}
+ var u=new SpeechSynthesisUtterance(text);u.lang="zh-CN";u.rate=1;
+ var vs=speechSynthesis.getVoices().filter(function(v){return /zh/i.test(v.lang)});if(vs[0])u.voice=vs[0];
+ if(cb)u.onend=cb;speechSynthesis.speak(u)}
+function announce(i){
+ var s=stops[i];if(!s)return;
+ speechSynthesis&&speechSynthesis.cancel();
+ $("state").textContent="已到站";$("curName").textContent=s.name;$("curStory").textContent=s.story;
+ ding();
+ setTimeout(function(){say("到站了，"+s.name+"。",function(){setTimeout(function(){say(s.story)},500)})},600);
+}
+function arrive(i){if(done[i])return;done[i]=true;announce(i);render()}
+function onPos(p){
+ var la=p.coords.latitude,ln=p.coords.longitude,r=+$("radius").value||40,nx=nextIdx();
+ for(var i=0;i<stops.length;i++){if(!done[i]&&dist(la,ln,stops[i].lat,stops[i].lng)<=r){arrive(i);return}}
+ if(nx>=0){var d=Math.round(dist(la,ln,stops[nx].lat,stops[nx].lng));
+  $("state").textContent="前往下一站";$("nextInfo").textContent="下一站："+stops[nx].name+"，还有约 "+d+" 米"}
+}
+function start(){
+ if(!navigator.geolocation){$("state").textContent="此浏览器不支持定位";return}
+ say("");
+ running=true;$("startBtn").textContent="■ 停止导览";$("state").textContent="定位中…";
+ watchId=navigator.geolocation.watchPosition(onPos,function(e){$("state").textContent="定位失败：请允许定位权限（可用“模拟到站”试听）"},{enableHighAccuracy:true,maximumAge:2000,timeout:20000});
+ try{navigator.wakeLock&&navigator.wakeLock.request("screen").then(function(w){wake=w}).catch(function(){})}catch(e){}
+}
+function stop(){
+ running=false;$("startBtn").textContent="▶ 开始导览";$("state").textContent="已停止";
+ if(watchId!=null)navigator.geolocation.clearWatch(watchId);watchId=null;
+ speechSynthesis&&speechSynthesis.cancel();try{wake&&wake.release()}catch(e){}
+}
+$("startBtn").onclick=function(){running?stop():start()};
+$("simBtn").onclick=function(){var n=nextIdx();if(n>=0)arrive(n)};
+$("resetBtn").onclick=function(){done={};speechSynthesis&&speechSynthesis.cancel();$("curName").textContent="—";$("curStory").textContent="已重置。";render()};
+$("list").onclick=function(e){
+ var p=e.target.getAttribute("data-play"),d=e.target.getAttribute("data-del");
+ if(p!==null)announce(+p);
+ if(d!==null){stops.splice(+d,1);done={};save();render()}
+};
+$("useLoc").onclick=function(){
+ navigator.geolocation&&navigator.geolocation.getCurrentPosition(function(p){$("fLat").value=p.coords.latitude.toFixed(5);$("fLng").value=p.coords.longitude.toFixed(5)},
+ function(){alert("无法获取定位，请允许定位权限")},{enableHighAccuracy:true})};
+$("addBtn").onclick=function(){
+ var n=$("fName").value.trim(),s=$("fStory").value.trim(),la=parseFloat($("fLat").value),ln=parseFloat($("fLng").value);
+ if(!n||isNaN(la)||isNaN(ln)){alert("请填写站名和坐标");return}
+ stops.push({name:n,story:s||"这里是"+n+"。",lat:la,lng:ln});save();
+ $("fName").value=$("fStory").value=$("fLat").value=$("fLng").value="";render()};
+if(window.speechSynthesis)speechSynthesis.getVoices();
+stops=load();render();
+</script>
+</body>
+</html>
